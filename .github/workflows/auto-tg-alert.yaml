@@ -12,4 +12,4 @@ jobs:
     steps:
        - name: Trigger endpoint
         run: |
-          curl -X POST https://arbitrage-monitor-bot.onrender.com/post-on-ping
+          curl -X POST https://polymarket_bot.onrender.com/post-on-ping
