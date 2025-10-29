@@ -1,2 +1,2 @@
-# Arbitrage-monitor-bot
-monitor jumper exchange for arbitage opportunity and send alert to telegram account
+# POLYMARKET-bot
+POLYMARKET Bot for new listings and bets opportunity alert to telegram channel
