@@ -1,6 +1,7 @@
 require('dotenv').config();
 const http = require('http');
 const fetch = require('node-fetch');
+const { getTopTradersForMarket } = require('./polymarket-graphql');
 
 const PORT = process.env.PORT || 3000;
 
@@ -76,8 +77,27 @@ async function processNewEvents(events) {
     const volume = formatCurrency(ev.volume24hr || ev.volume);
     const endDate = formatDate(ev.endDate);
 
-    // Main message block
-    const message = `🚨 *New Polymarket Listing!*\n\n*${title}*\n\n📅 *Ends:* ${endDate}\n💰 *Volume:* ${volume}\n🔗 [View Market](${eventUrl})`;
+    // ---- Fetch top traders for this market ----
+    console.log('🔍 Fetching top traders for market slug:', ev.slug);
+
+    let tradersText = '';
+    try {
+   const traders = await getTopTradersForMarket(ev.slug);
+
+
+      if (traders.length > 0) {
+        tradersText = '\n\n💼 *Top Traders:*\n';
+        traders.forEach((t, i) => {
+          tradersText += `${i + 1}. [${t.trader.slice(0, 6)}...${t.trader.slice(-4)}](https://polymarket.com/${t.trader}) — ${t.amount} on ${t.outcome}\n`;
+        });
+      }
+    } catch (err) {
+      console.error(`Error fetching traders for ${ev.slug}:`, err.message);
+    }
+
+
+    // ---- Compose final message ----
+    const message = `🚨 *New Polymarket Listing!*\n\n*${title}*\n\n📅 *Ends:* ${endDate}\n💰 *Volume:* ${volume}\n🔗 [View Market](${eventUrl})${tradersText}`;
 
     console.log('Sending alert for:', ev.slug);
     await sendTelegramMessage(message);
@@ -112,9 +132,3 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
