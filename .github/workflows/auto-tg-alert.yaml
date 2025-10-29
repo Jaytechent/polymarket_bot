@@ -2,7 +2,7 @@ name: Auto-trigger-TG
 
 on:
   schedule:
-    - cron: "0 */4 * * *"  # Triggers every 2 hours
+    - cron: "0 */2 * * *"  # Triggers every 2 hours
   workflow_dispatch:  # Allows manual triggering
 
 jobs:
@@ -11,5 +11,5 @@ jobs:
 
     steps:
        - name: Trigger endpoint
-        run: |
-          curl -X POST https://polymarket_bot.onrender.com/post-on-ping
+        run:
+          curl -X POST https://polymarket-bot-dll9.onrender.com/post-on-ping
