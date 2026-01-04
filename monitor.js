@@ -22,16 +22,20 @@ let watchedMarkets = new Set();
 /* ---------------- TELEGRAM ---------------- */
 
 async function sendTG(text) {
-  await fetch(`${TG_API}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: CHAT_ID,
-      text,
-      parse_mode: 'Markdown',
-      disable_web_page_preview: true
-    })
-  });
+  try {
+    await fetch(`${TG_API}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: CHAT_ID,
+        text,
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true
+      })
+    });
+  } catch (e) {
+    console.error('TG error:', e.message);
+  }
 }
 
 /* ---------------- HELPERS ---------------- */
@@ -39,7 +43,7 @@ async function sendTG(text) {
 const fmt = n => `$${Number(n).toLocaleString()}`;
 const short = w => `${w.slice(0, 6)}…${w.slice(-4)}`;
 
-/* ---------------- MARKET LISTINGS (OLD FORMAT) ---------------- */
+/* ---------------- MARKET LISTINGS (UNCHANGED) ---------------- */
 
 async function fetchEvents() {
   const r = await fetch(GAMMA_API);
@@ -48,7 +52,7 @@ async function fetchEvents() {
 
 async function processEvents(events) {
   for (const ev of events) {
-    if (seenEvents.has(ev.id)) continue;
+    if (!ev?.id || seenEvents.has(ev.id)) continue;
 
     const msg =
 `🚨 *New Polymarket Listing!*
@@ -64,46 +68,54 @@ async function processEvents(events) {
   }
 }
 
-/* ---------------- TRADES & WHALE ALERTS ---------------- */
+/* ---------------- GLOBAL TRADES & WHALE ALERTS ---------------- */
 
 async function fetchTrades() {
-  const r = await fetch(`${DATA_API}/trades?limit=50`);
+  const r = await fetch(`${DATA_API}/trades?limit=100`);
   return r.json();
 }
 
 async function processTrades(trades) {
+  if (!Array.isArray(trades)) return;
+
   for (const t of trades) {
-    if (seenTrades.has(t.id)) continue;
+    if (!t?.id || seenTrades.has(t.id)) continue;
     seenTrades.add(t.id);
 
-    const usd = Number(t.amountUSD);
-    const wallet = t.user;
+    const usd = Number(t.amount_usd || 0);
+    const wallet = t.trader;
+    const market = t.market_slug;
 
+    if (!wallet || usd <= 0) continue;
+
+    // 🆕 NEW WALLET ALERT (first time ≥ $1,000)
     if (!knownWallets.has(wallet) && usd >= 1000) {
+      knownWallets.add(wallet);
       await sendTG(
 `🆕 *New Wallet Trade*
 👛 ${short(wallet)}
 💰 ${fmt(usd)}
-📊 ${t.market}`
+📊 ${market}`
       );
-      knownWallets.add(wallet);
     }
 
+    // 🐳 WHALE ALERT (≥ $20,000)
     if (usd >= 20000) {
       await sendTG(
 `🐳 *WHALE ALERT*
 👛 ${short(wallet)}
 💰 ${fmt(usd)}
-📊 ${t.market}`
+📊 ${market}`
       );
     }
 
-    if (watchedWallets.has(wallet) || watchedMarkets.has(t.market)) {
+    // 👀 WATCHED
+    if (watchedWallets.has(wallet) || watchedMarkets.has(market)) {
       await sendTG(
 `👀 *Watched Trade*
 👛 ${short(wallet)}
 💰 ${fmt(usd)}
-📊 ${t.market}`
+📊 ${market}`
       );
     }
   }
@@ -114,34 +126,34 @@ async function processTrades(trades) {
 async function handleCommand(text) {
   const [cmd, arg, val] = text.split(' ');
 
-  if (cmd === '/market') {
+  if (cmd === '/market' && arg) {
     const r = await fetch(`${DATA_API}/trades?market=${arg}`);
     const trades = await r.json();
 
     let msg = `📊 *Market Activity*\n${arg}\n\n`;
     trades.slice(0, 5).forEach(t => {
-      msg += `• ${fmt(t.amountUSD)} — ${short(t.user)}\n`;
+      msg += `• ${fmt(t.amount_usd)} — ${short(t.trader)}\n`;
     });
     return sendTG(msg);
   }
 
-  if (cmd === '/wallet') {
+  if (cmd === '/wallet' && arg) {
     const r = await fetch(`${DATA_API}/activity?user=${arg}`);
     const acts = await r.json();
 
     let msg = `👛 *Wallet Activity*\n${short(arg)}\n\n`;
     acts.slice(0, 5).forEach(a => {
-      msg += `• ${fmt(a.amountUSD)} — ${a.market}\n`;
+      msg += `• ${fmt(a.amount_usd)} — ${a.market_slug}\n`;
     });
     return sendTG(msg);
   }
 
-  if (cmd === '/watch' && arg === 'wallet') {
+  if (cmd === '/watch' && arg === 'wallet' && val) {
     watchedWallets.add(val);
     return sendTG(`👀 Watching wallet ${short(val)}`);
   }
 
-  if (cmd === '/watch' && arg === 'market') {
+  if (cmd === '/watch' && arg === 'market' && val) {
     watchedMarkets.add(val);
     return sendTG(`👀 Watching market ${val}`);
   }
@@ -154,10 +166,12 @@ http.createServer(async (req, res) => {
     let body = '';
     req.on('data', d => body += d);
     req.on('end', async () => {
-      const update = JSON.parse(body);
-      if (update.message?.text) {
-        await handleCommand(update.message.text);
-      }
+      try {
+        const update = JSON.parse(body);
+        if (update.message?.text) {
+          await handleCommand(update.message.text);
+        }
+      } catch {}
       res.end('ok');
     });
     return;
@@ -173,7 +187,6 @@ http.createServer(async (req, res) => {
 }).listen(PORT, () =>
   console.log(`🚀 Bot live on ${PORT}`)
 );
-
 
 // require('dotenv').config();
 // const http = require('http');
@@ -309,4 +322,5 @@ http.createServer(async (req, res) => {
 // server.listen(PORT, () => {
 //   console.log(`Server running on port ${PORT}`);
 // });
+
 
