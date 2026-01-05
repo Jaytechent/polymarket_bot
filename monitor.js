@@ -14,16 +14,30 @@ const WHALE_THRESHOLD = 500; // USD
 const PORT = process.env.PORT || 3000;
 
 /* ===================== TELEGRAM ===================== */
-
 async function sendTelegram(message) {
-  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-  await axios.post(url, {
-    chat_id: TELEGRAM_CHAT_ID,
-    text: message,
-    parse_mode: "Markdown",
-    disable_web_page_preview: false,
-  });
+  try {
+    const res = await axios.post(
+      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+      {
+        chat_id: TELEGRAM_CHAT_ID,
+        text: message,
+      }
+    );
+    console.log("Telegram OK:", res.data);
+  } catch (err) {
+    console.error("Telegram FAILED:", err.response?.data || err.message);
+  }
 }
+
+// async function sendTelegram(message) {
+//   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+//   await axios.post(url, {
+//     chat_id: TELEGRAM_CHAT_ID,
+//     text: message,
+//     parse_mode: "Markdown",
+//     disable_web_page_preview: false,
+//   });
+// }
 
 /* ===================== POLYMARKET FETCHERS ===================== */
 
@@ -182,6 +196,9 @@ async function processNewEvents(conditionIds) {
 })();
 
 /* ===================== RENDER SERVER ===================== */
+(async () => {
+  await sendTelegram("✅ TEST: Polymarket bot is alive");
+})();
 
 const server = http.createServer(async (req, res) => {
   if (req.url === "/post-on-ping" && req.method === "POST") {
@@ -338,6 +355,7 @@ server.listen(PORT, () =>
 // server.listen(PORT, () => {
 //   console.log(`Server running on port ${PORT}`);
 // });
+
 
 
 
