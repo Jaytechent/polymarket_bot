@@ -1,192 +1,208 @@
-require('dotenv').config();
-const http = require('http');
-const fetch = require('node-fetch');
+require("dotenv").config();
+const axios = require("axios");
+const http = require("http");
 
+/* ===================== CONFIG ===================== */
+
+const DATA_API = "https://data-api.polymarket.com";
+const CORE_API = "https://api.polymarket.com";
+
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const TRADE_LOOKBACK = Number(process.env.TRADE_LOOKBACK || 50);
+const WHALE_THRESHOLD = 500; // USD
 const PORT = process.env.PORT || 3000;
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const CHAT_ID = process.env.CHAT_ID;
 
-const TG_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+/* ===================== TELEGRAM ===================== */
 
-const GAMMA_API =
-  'https://gamma-api.polymarket.com/events?order=id&ascending=false&closed=false&limit=50';
+async function sendTelegram(message) {
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  await axios.post(url, {
+    chat_id: TELEGRAM_CHAT_ID,
+    text: message,
+    parse_mode: "Markdown",
+    disable_web_page_preview: false,
+  });
+}
 
-const DATA_API = 'https://data-api.polymarket.com';
+/* ===================== POLYMARKET FETCHERS ===================== */
 
-let seenEvents = new Set();
-let seenTrades = new Set();
-let knownWallets = new Set();
-let watchedWallets = new Set();
-let watchedMarkets = new Set();
-
-/* ---------------- TELEGRAM ---------------- */
-
-async function sendTG(text) {
+// 1️⃣ Trades → discover active markets
+async function fetchRecentConditionIds() {
   try {
-    await fetch(`${TG_API}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: CHAT_ID,
-        text,
-        parse_mode: 'Markdown',
-        disable_web_page_preview: true
-      })
+    const res = await axios.get(
+      `${DATA_API}/trades?limit=${TRADE_LOOKBACK}`
+    );
+
+    const ids = new Set();
+    res.data?.forEach((t) => {
+      if (t.conditionId) ids.add(t.conditionId);
     });
-  } catch (e) {
-    console.error('TG error:', e.message);
+
+    return [...ids];
+  } catch (err) {
+    console.error("Trades error:", err.message);
+    return [];
   }
 }
 
-/* ---------------- HELPERS ---------------- */
+// 🐳 Whale trades (uses /trades correctly)
+async function fetchWhaleTrades() {
+  try {
+    const res = await axios.get(
+      `${DATA_API}/trades?limit=${TRADE_LOOKBACK}`
+    );
 
-const fmt = n => `$${Number(n).toLocaleString()}`;
-const short = w => `${w.slice(0, 6)}…${w.slice(-4)}`;
-
-/* ---------------- MARKET LISTINGS (UNCHANGED) ---------------- */
-
-async function fetchEvents() {
-  const r = await fetch(GAMMA_API);
-  return r.json();
-}
-
-async function processEvents(events) {
-  for (const ev of events) {
-    if (!ev?.id || seenEvents.has(ev.id)) continue;
-
-    const msg =
-`🚨 *New Polymarket Listing!*
-
-*${ev.title || ev.question}*
-
-📅 Ends: ${new Date(ev.endDate).toDateString()}
-💰 Volume: ${fmt(ev.volume || 0)}
-🔗 [View Market](https://polymarket.com/event/${ev.slug})`;
-
-    await sendTG(msg);
-    seenEvents.add(ev.id);
+    return (res.data || []).filter(
+      (t) => Number(t.usdValue) >= WHALE_THRESHOLD
+    );
+  } catch (err) {
+    console.error("Whale trades error:", err.message);
+    return [];
   }
 }
 
-/* ---------------- GLOBAL TRADES & WHALE ALERTS ---------------- */
+// 2️⃣ Market metadata (name + slug)
+async function fetchMarketDetails(conditionId) {
+  try {
+    const res = await axios.get(
+      `${CORE_API}/markets/${conditionId}`
+    );
 
-async function fetchTrades() {
-  const r = await fetch(`${DATA_API}/trades?limit=100`);
-  return r.json();
+    return {
+      title: res.data?.title || "Unknown Market",
+      slug: res.data?.slug || conditionId,
+    };
+  } catch {
+    return {
+      title: "Unknown Market",
+      slug: conditionId,
+    };
+  }
 }
 
-async function processTrades(trades) {
-  if (!Array.isArray(trades)) return;
+// 3️⃣ Top holders
+async function fetchTopHolders(conditionId) {
+  try {
+    const res = await axios.get(
+      `${DATA_API}/top-holders?market=${conditionId}&limit=10`
+    );
+    return res.data || [];
+  } catch {
+    return [];
+  }
+}
 
-  for (const t of trades) {
-    if (!t?.id || seenTrades.has(t.id)) continue;
-    seenTrades.add(t.id);
+// 4️⃣ Activity
+async function fetchActivity(conditionId) {
+  try {
+    const res = await axios.get(
+      `${DATA_API}/activity?market=${conditionId}`
+    );
+    return res.data || [];
+  } catch {
+    return [];
+  }
+}
 
-    const usd = Number(t.amount_usd || 0);
-    const wallet = t.trader;
-    const market = t.market_slug;
+/* ===================== CORE WORKFLOW ===================== */
 
-    if (!wallet || usd <= 0) continue;
+async function fetchPolymarketEvents() {
+  return fetchRecentConditionIds();
+}
 
-    // 🆕 NEW WALLET ALERT (first time ≥ $1,000)
-    if (!knownWallets.has(wallet) && usd >= 1000) {
-      knownWallets.add(wallet);
-      await sendTG(
-`🆕 *New Wallet Trade*
-👛 ${short(wallet)}
-💰 ${fmt(usd)}
-📊 ${market}`
-      );
+async function processNewEvents(conditionIds) {
+  const whaleTrades = await fetchWhaleTrades();
+
+  for (const cid of conditionIds) {
+    const market = await fetchMarketDetails(cid);
+    const tradeLink = `https://polymarket.com/market/${market.slug}`;
+
+    /* -------- TOP HOLDERS -------- */
+    const holders = await fetchTopHolders(cid);
+
+    if (holders.length) {
+      let msg = `🧠 *Top Holders Update*\n\n`;
+      msg += `📊 *Market:* ${market.title}\n`;
+      msg += `🆔 \`${cid}\`\n`;
+      msg += `🔗 [Place Trade](${tradeLink})\n\n`;
+
+      holders.forEach((token) => {
+        token.holders?.forEach((h) => {
+          msg += `• ${h.pseudonym || h.proxyWallet}: *$${Number(h.amount).toFixed(2)}*\n`;
+        });
+      });
+
+      await sendTelegram(msg);
     }
 
-    // 🐳 WHALE ALERT (≥ $20,000)
-    if (usd >= 20000) {
-      await sendTG(
-`🐳 *WHALE ALERT*
-👛 ${short(wallet)}
-💰 ${fmt(usd)}
-📊 ${market}`
-      );
+    /* -------- ACTIVITY -------- */
+    const activity = await fetchActivity(cid);
+
+    if (activity.length) {
+      let msg = `🔍 *Recent Activity*\n\n`;
+      msg += `📊 *Market:* ${market.title}\n`;
+      msg += `🆔 \`${cid}\`\n`;
+      msg += `🔗 [Place Trade](${tradeLink})\n\n`;
+
+      activity.slice(0, 10).forEach((a) => {
+        msg += `• ${a.action || "action"} by \`${a.wallet}\`\n`;
+      });
+
+      await sendTelegram(msg);
     }
 
-    // 👀 WATCHED
-    if (watchedWallets.has(wallet) || watchedMarkets.has(market)) {
-      await sendTG(
-`👀 *Watched Trade*
-👛 ${short(wallet)}
-💰 ${fmt(usd)}
-📊 ${market}`
-      );
+    /* -------- 🐳 WHALE TRADES -------- */
+    for (const trade of whaleTrades) {
+      if (trade.conditionId !== cid) continue;
+
+      const whaleMsg = `
+🐳 *Whale Trade Detected*
+
+📊 *Market:* ${market.title}
+🆔 \`${cid}\`
+🔗 [Place Trade](${tradeLink})
+
+👛 Wallet: \`${trade.wallet}\`
+🔄 Action: *${trade.side}*
+💰 Amount: *$${Number(trade.usdValue).toFixed(2)}*
+⏱ Time: ${new Date(trade.timestamp).toUTCString()}
+      `.trim();
+
+      await sendTelegram(whaleMsg);
     }
   }
 }
 
-/* ---------------- TELEGRAM COMMANDS ---------------- */
+/* ===================== AUTO RUN ===================== */
 
-async function handleCommand(text) {
-  const [cmd, arg, val] = text.split(' ');
+(async () => {
+  const events = await fetchPolymarketEvents();
+  await processNewEvents(events);
+})();
 
-  if (cmd === '/market' && arg) {
-    const r = await fetch(`${DATA_API}/trades?market=${arg}`);
-    const trades = await r.json();
+/* ===================== RENDER SERVER ===================== */
 
-    let msg = `📊 *Market Activity*\n${arg}\n\n`;
-    trades.slice(0, 5).forEach(t => {
-      msg += `• ${fmt(t.amount_usd)} — ${short(t.trader)}\n`;
-    });
-    return sendTG(msg);
+const server = http.createServer(async (req, res) => {
+  if (req.url === "/post-on-ping" && req.method === "POST") {
+    const events = await fetchPolymarketEvents();
+    await processNewEvents(events);
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ message: "Polymarket check completed" }));
+  } else if (req.url === "/") {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("Polymarket Alert Bot is running!");
+  } else {
+    res.writeHead(404);
+    res.end();
   }
+});
 
-  if (cmd === '/wallet' && arg) {
-    const r = await fetch(`${DATA_API}/activity?user=${arg}`);
-    const acts = await r.json();
-
-    let msg = `👛 *Wallet Activity*\n${short(arg)}\n\n`;
-    acts.slice(0, 5).forEach(a => {
-      msg += `• ${fmt(a.amount_usd)} — ${a.market_slug}\n`;
-    });
-    return sendTG(msg);
-  }
-
-  if (cmd === '/watch' && arg === 'wallet' && val) {
-    watchedWallets.add(val);
-    return sendTG(`👀 Watching wallet ${short(val)}`);
-  }
-
-  if (cmd === '/watch' && arg === 'market' && val) {
-    watchedMarkets.add(val);
-    return sendTG(`👀 Watching market ${val}`);
-  }
-}
-
-/* ---------------- SERVER ---------------- */
-
-http.createServer(async (req, res) => {
-  if (req.method === 'POST') {
-    let body = '';
-    req.on('data', d => body += d);
-    req.on('end', async () => {
-      try {
-        const update = JSON.parse(body);
-        if (update.message?.text) {
-          await handleCommand(update.message.text);
-        }
-      } catch {}
-      res.end('ok');
-    });
-    return;
-  }
-
-  const events = await fetchEvents();
-  const trades = await fetchTrades();
-
-  await processEvents(events);
-  await processTrades(trades);
-
-  res.end('running');
-}).listen(PORT, () =>
-  console.log(`🚀 Bot live on ${PORT}`)
+server.listen(PORT, () =>
+  console.log(`Server running on port ${PORT}`)
 );
+
 
 // require('dotenv').config();
 // const http = require('http');
@@ -322,5 +338,6 @@ http.createServer(async (req, res) => {
 // server.listen(PORT, () => {
 //   console.log(`Server running on port ${PORT}`);
 // });
+
 
 
