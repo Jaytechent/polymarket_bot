@@ -13,31 +13,27 @@ const TRADE_LOOKBACK = Number(process.env.TRADE_LOOKBACK || 50);
 const WHALE_THRESHOLD = 500; // USD
 const PORT = process.env.PORT || 3000;
 
-/* ===================== TELEGRAM ===================== */
-async function sendTelegram(message) {
-  try {
-    const res = await axios.post(
-      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
-      {
-        chat_id: TELEGRAM_CHAT_ID,
-        text: message,
-      }
-    );
-    console.log("Telegram OK:", res.data);
-  } catch (err) {
-    console.error("Telegram FAILED:", err.response?.data || err.message);
-  }
+/* ===================== MARKDOWN ESCAPER ===================== */
+
+function escapeMD(text = "") {
+  return text.toString().replace(/[_*[\]()~`>#+\-=|{}.!]/g, "\\$&");
 }
 
-// async function sendTelegram(message) {
-//   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-//   await axios.post(url, {
-//     chat_id: TELEGRAM_CHAT_ID,
-//     text: message,
-//     parse_mode: "Markdown",
-//     disable_web_page_preview: false,
-//   });
-// }
+/* ===================== TELEGRAM ===================== */
+
+async function sendTelegram(message) {
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  try {
+    await axios.post(url, {
+      chat_id: TELEGRAM_CHAT_ID,
+      text: message,
+      parse_mode: "MarkdownV2",
+      disable_web_page_preview: false,
+    });
+  } catch (err) {
+    console.error("Telegram error:", err.response?.data || err.message);
+  }
+}
 
 /* ===================== POLYMARKET FETCHERS ===================== */
 
@@ -60,7 +56,7 @@ async function fetchRecentConditionIds() {
   }
 }
 
-// 🐳 Whale trades (uses /trades correctly)
+// 🐳 Whale trades
 async function fetchWhaleTrades() {
   try {
     const res = await axios.get(
@@ -76,7 +72,7 @@ async function fetchWhaleTrades() {
   }
 }
 
-// 2️⃣ Market metadata (name + slug)
+// 2️⃣ Market metadata
 async function fetchMarketDetails(conditionId) {
   try {
     const res = await axios.get(
@@ -137,13 +133,13 @@ async function processNewEvents(conditionIds) {
 
     if (holders.length) {
       let msg = `🧠 *Top Holders Update*\n\n`;
-      msg += `📊 *Market:* ${market.title}\n`;
-      msg += `🆔 \`${cid}\`\n`;
-      msg += `🔗 [Place Trade](${tradeLink})\n\n`;
+      msg += `📊 *Market:* ${escapeMD(market.title)}\n`;
+      msg += `🆔 \`${escapeMD(cid)}\`\n`;
+      msg += `🔗 [Place Trade](${escapeMD(tradeLink)})\n\n`;
 
       holders.forEach((token) => {
         token.holders?.forEach((h) => {
-          msg += `• ${h.pseudonym || h.proxyWallet}: *$${Number(h.amount).toFixed(2)}*\n`;
+          msg += `• ${escapeMD(h.pseudonym || h.proxyWallet)}: *\\$${Number(h.amount).toFixed(2)}*\n`;
         });
       });
 
@@ -155,12 +151,12 @@ async function processNewEvents(conditionIds) {
 
     if (activity.length) {
       let msg = `🔍 *Recent Activity*\n\n`;
-      msg += `📊 *Market:* ${market.title}\n`;
-      msg += `🆔 \`${cid}\`\n`;
-      msg += `🔗 [Place Trade](${tradeLink})\n\n`;
+      msg += `📊 *Market:* ${escapeMD(market.title)}\n`;
+      msg += `🆔 \`${escapeMD(cid)}\`\n`;
+      msg += `🔗 [Place Trade](${escapeMD(tradeLink)})\n\n`;
 
       activity.slice(0, 10).forEach((a) => {
-        msg += `• ${a.action || "action"} by \`${a.wallet}\`\n`;
+        msg += `• ${escapeMD(a.action || "action")} by \`${escapeMD(a.wallet)}\`\n`;
       });
 
       await sendTelegram(msg);
@@ -173,14 +169,14 @@ async function processNewEvents(conditionIds) {
       const whaleMsg = `
 🐳 *Whale Trade Detected*
 
-📊 *Market:* ${market.title}
-🆔 \`${cid}\`
-🔗 [Place Trade](${tradeLink})
+📊 *Market:* ${escapeMD(market.title)}
+🆔 \`${escapeMD(cid)}\`
+🔗 [Place Trade](${escapeMD(tradeLink)})
 
-👛 Wallet: \`${trade.wallet}\`
-🔄 Action: *${trade.side}*
-💰 Amount: *$${Number(trade.usdValue).toFixed(2)}*
-⏱ Time: ${new Date(trade.timestamp).toUTCString()}
+👛 Wallet: \`${escapeMD(trade.wallet)}\`
+🔄 Action: *${escapeMD(trade.side)}*
+💰 Amount: *\\$${Number(trade.usdValue).toFixed(2)}*
+⏱ Time: ${escapeMD(new Date(trade.timestamp).toUTCString())}
       `.trim();
 
       await sendTelegram(whaleMsg);
@@ -196,9 +192,6 @@ async function processNewEvents(conditionIds) {
 })();
 
 /* ===================== RENDER SERVER ===================== */
-(async () => {
-  await sendTelegram("✅ TEST: Polymarket bot is alive");
-})();
 
 const server = http.createServer(async (req, res) => {
   if (req.url === "/post-on-ping" && req.method === "POST") {
@@ -355,6 +348,7 @@ server.listen(PORT, () =>
 // server.listen(PORT, () => {
 //   console.log(`Server running on port ${PORT}`);
 // });
+
 
 
 
