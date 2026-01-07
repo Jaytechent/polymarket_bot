@@ -53,11 +53,19 @@ function isCryptoMarket(trade) {
   const text = `${trade.title} ${trade.slug}`.toLowerCase();
   return (
     text.includes("bitcoin") ||
-    text.includes("btc") ||
+    text.includes("market") ||
     text.includes("ethereum") ||
-    text.includes("eth") ||
+    text.includes("airdrop") ||
+    text.includes("token") ||
+    text.includes("buyback") ||
+    text.includes("FDV") ||
+    text.includes("price") ||
+    text.includes("sale") ||
+    text.includes("launch") ||
+    text.includes("dip") ||
+    text.includes("exchange") ||
+    text.includes("cap") ||
     text.includes("solana") ||
-    text.includes("sol") ||
     text.includes("crypto")
   );
 }
@@ -348,6 +356,7 @@ server.listen(PORT, () =>
 // server.listen(PORT, () =>
 //   console.log(`Server running on port ${PORT}`)
 // );
+
 
 
 
