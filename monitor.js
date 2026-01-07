@@ -13,7 +13,7 @@ const PORT = process.env.PORT || 3000;
 
 // polling window
 const TRADE_LOOKBACK = 50;
-const POLL_WINDOW_SECONDS = 300; // last 5 minutes
+const POLL_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 const WHALE_THRESHOLD_USD = 500;
 
 /* ===================== TELEGRAM ===================== */
@@ -64,11 +64,11 @@ function interpretTrade(trade) {
 /* ===================== CORE LOGIC ===================== */
 
 async function scanPolymarket() {
-  const now = Math.floor(Date.now() / 1000);
+  const now = Date.now();
   const trades = await fetchRecentTrades();
 
   const recentTrades = trades.filter(
-    (t) => now - Number(t.timestamp) <= POLL_WINDOW_SECONDS
+    (t) => now - Number(t.timestamp) <= POLL_WINDOW_MS
   );
 
   let alertsSent = 0;
@@ -93,7 +93,7 @@ async function scanPolymarket() {
 👛 Wallet: \`${t.proxyWallet}\`
 🔄 Action: *BUY*
 💰 *Position Size:* $${usdValue.toFixed(2)}
-⏱ Time: ${new Date(t.timestamp * 1000).toUTCString()}
+⏱ Time: ${new Date(t.timestamp).toUTCString()}
 
 🔗 [Place Trade](https://polymarket.com/market/${t.slug})
     `.trim();
@@ -102,38 +102,36 @@ async function scanPolymarket() {
     alertsSent++;
   }
 
-  /* -------- 🧠 TOP TRADERS (DERIVED) -------- */
+  /* -------- 🧠 TOP TRADERS -------- */
   const walletAgg = {};
 
   for (const t of recentTrades) {
     const usd = Number(t.size) * Number(t.price);
-    if (!walletAgg[t.proxyWallet]) {
-      walletAgg[t.proxyWallet] = { usd: 0, market: t };
-    }
-    walletAgg[t.proxyWallet].usd += usd;
+    walletAgg[t.proxyWallet] =
+      (walletAgg[t.proxyWallet] || 0) + usd;
   }
 
   const topTraders = Object.entries(walletAgg)
-    .filter(([, v]) => v.usd >= WHALE_THRESHOLD_USD)
-    .sort((a, b) => b[1].usd - a[1].usd)
+    .filter(([, usd]) => usd >= WHALE_THRESHOLD_USD)
+    .sort((a, b) => b[1] - a[1])
     .slice(0, 3);
 
   if (topTraders.length) {
     let msg = `🧠 *Top Traders (last 5 mins)*\n\n`;
 
-    topTraders.forEach(([wallet, data], i) => {
+    topTraders.forEach(([wallet, usd], i) => {
       msg += `${i + 1}. \`${wallet.slice(0, 6)}...${wallet.slice(-4)}\`\n`;
-      msg += `   💰 $${data.usd.toFixed(2)} on *${data.market.title}*\n\n`;
+      msg += `   💰 $${usd.toFixed(2)}\n\n`;
     });
 
     await sendTelegram(msg.trim());
     alertsSent++;
   }
 
-  /* -------- 🤖 HEARTBEAT -------- */
+  /* -------- 🤖 HEARTBEAT (ALWAYS SEND) -------- */
   if (alertsSent === 0) {
     await sendTelegram(
-      `🤖 *Bot Active*\n\nScanning Polymarket...\nNo whale trades or major activity detected in the last 5 minutes.`
+      `🤖 *Bot Active*\n\nScanned ${recentTrades.length} trades.\nNo whale activity in the last 5 minutes.`
     );
   }
 }
@@ -141,6 +139,7 @@ async function scanPolymarket() {
 /* ===================== AUTO RUN ===================== */
 
 (async () => {
+  await sendTelegram("✅ *Bot Started*\nPolymarket scanner is live.");
   await scanPolymarket();
 })();
 
@@ -310,5 +309,6 @@ server.listen(PORT, () =>
 // server.listen(PORT, () =>
 //   console.log(`Server running on port ${PORT}`)
 // );
+
 
 
